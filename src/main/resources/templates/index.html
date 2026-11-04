@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PharmaTrace — Cold-Chain Telemetry &amp; RFID Custody Platform</title>
+    <link rel="stylesheet" th:href="@{/css/dashboard.css}">
+</head>
+<body>
+
+    <!-- Header & Navigation Bar -->
+    <header class="navbar">
+        <div class="brand-section">
+            <div class="brand-logo-icon">
+                &#9919;
+            </div>
+            <div>
+                <div class="brand-title">
+                    PharmaTrace <span class="badge-pill">Enterprise Cold-Chain</span>
+                </div>
+                <div class="brand-subtitle">
+                    IoT Hardware Telemetry &bull; RFID Custody Validation &bull; Keccak-256 Ledger
+                </div>
+            </div>
+        </div>
+
+        <div class="header-status-group">
+            <div id="evm-status-pill" th:class="${evmConnected} ? 'status-pill online' : 'status-pill evm-standby'">
+                <span class="pulse-dot"></span>
+                <span th:text="${evmConnected} ? 'EVM Node Connected' : 'EVM Standby (Keccak-256 Notarization)'">EVM Standby</span>
+            </div>
+
+            <div class="status-pill online">
+                <span id="polling-indicator" class="pulse-dot"></span>
+                <span>Live Feed (<span id="live-clock">--:--:--</span>)</span>
+            </div>
+
+            <button id="toggle-polling-btn" class="btn btn-neutral" onclick="togglePolling()">
+                Pause Stream
+            </button>
+            <button class="btn btn-primary" onclick="fetchDashboardUpdates()">
+                &#8635; Sync Now
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main-wrapper">
+
+        <!-- Real-Time RFID Verification Alert Banner -->
+        <section id="verification-banner" 
+                 th:class="${latestLog != null and latestLog.verificationStatus != null} ? 
+                    (${latestLog.verificationStatus.name() == 'UNAUTHORIZED_TAG_BREACH'} ? 'verification-banner tamper-breach' : 
+                    (${latestLog.verificationStatus.name() == 'THERMAL_BREACH'} ? 'verification-banner thermal-breach' : 'verification-banner authentic')) : 
+                    'verification-banner authentic'">
+            <div class="banner-left">
+                <div id="banner-icon" class="banner-icon">
+                    <span th:if="${latestLog == null or latestLog.verificationStatus.name() == 'AUTHENTIC_VERIFIED'}">&#128737;&#65039;</span>
+                    <span th:if="${latestLog != null and latestLog.verificationStatus.name() == 'UNAUTHORIZED_TAG_BREACH'}">&#128680;</span>
+                    <span th:if="${latestLog != null and latestLog.verificationStatus.name() == 'THERMAL_BREACH'}">&#9888;&#65039;</span>
+                </div>
+                <div>
+                    <div id="banner-title" class="banner-title" 
+                         th:text="${latestLog != null and latestLog.verificationStatus != null} ? 
+                            (${latestLog.verificationStatus.name() == 'UNAUTHORIZED_TAG_BREACH'} ? 'CRITICAL SECURITY BREACH: UNAUTHORIZED RFID TAG DETECTED' : 
+                            (${latestLog.verificationStatus.name() == 'THERMAL_BREACH'} ? 'COLD-CHAIN INTEGRITY WARNING: TEMPERATURE EXCURSION' : 'AUTHENTIC RFID VERIFIED — CUSTODY CHAIN VALID')) : 
+                            'SYSTEM READY — MONITORING COLD-CHAIN TELEMETRY'">
+                        AUTHENTIC RFID VERIFIED — CUSTODY CHAIN VALID
+                    </div>
+                    <div id="banner-desc" class="banner-desc"
+                         th:text="${latestLog != null} ? ${latestLog.notes} : 'Waiting for telemetry transmission or authorized Tag A scan.'">
+                        Authorized Tag UID verified authentic. Cold-chain parameters secure.
+                    </div>
+                </div>
+            </div>
+
+            <div class="banner-actuators">
+                <div id="buzzer-pill" 
+                     th:class="${latestLog != null and latestLog.buzzerActive} ? 'actuator-pill buzzer-active' : 'actuator-pill'">
+                    <span th:text="${latestLog != null and latestLog.buzzerActive} ? '🔊' : '🔇'">🔇</span>
+                    <span th:text="${latestLog != null and latestLog.buzzerActive} ? 'Buzzer: ACTIVE ALARM' : 'Buzzer: SILENT'">Buzzer: SILENT</span>
+                </div>
+                <div id="led-pill" 
+                     th:class="${latestLog != null} ? 
+                        (${latestLog.ledColor == 'RED'} ? 'actuator-pill led-red' : 
+                        (${latestLog.ledColor == 'AMBER'} ? 'actuator-pill led-amber' : 'actuator-pill led-green')) : 
+                        'actuator-pill led-green'">
+                    <span th:text="${latestLog != null and latestLog.ledColor == 'RED'} ? '🔴' : (${latestLog != null and latestLog.ledColor == 'AMBER'} ? '🟡' : '🟢')">🟢</span>
+                    <span th:text="${latestLog != null} ? 'LED: ' + ${latestLog.ledColor} : 'LED: GREEN'">LED: GREEN</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4 Key Visual Cards Grid -->
+        <div class="dashboard-grid">
+
+            <!-- Card 1: Active Product Batch & Bound RFID UID -->
+            <div class="dash-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <span class="card-icon">&#128230;</span> Active Product Batch
+                    </span>
+                    <span class="badge badge-success">Custody Bound</span>
+                </div>
+                <div class="batch-id-display">
+                    <span id="batch-id-val" th:text="${batch.batchId}">VAX-B4920-COVID19</span>
+                    <button class="copy-btn" th:attr="onclick=|copyToClipboard('${batch.batchId}', this)|">Copy</button>
+                </div>
+                <div id="product-name-val" class="product-name-label" th:text="${batch.productName}">
+                    mRNA-1273 Specialized Vaccine (Cold-Chain Grade)
+                </div>
+                <div class="rfid-box">
+                    <div>
+                        <div class="rfid-box-label">Tag 1 (Authorized Primary)</div>
+                        <div id="bound-rfid-val" class="rfid-uid-code" th:text="${tag1Rfid}">2AF52B07</div>
+                    </div>
+                    <span style="font-size: 1.15rem;">&#128246;</span>
+                </div>
+                <div class="rfid-box" style="margin-top: 0.4rem;">
+                    <div>
+                        <div class="rfid-box-label">Tag 2 (Authorized Custodian)</div>
+                        <div id="secondary-rfid-val" class="rfid-uid-code" th:text="${tag2Rfid}">659A1707</div>
+                    </div>
+                    <span style="font-size: 1.15rem;">&#128100;</span>
+                </div>
+            </div>
+
+            <!-- Card 2: Live Temperature & Humidity Readout (DHT22 Feed) -->
+            <div class="dash-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <span class="card-icon">&#127777;&#65039;</span> Live DHT22 Telemetry
+                    </span>
+                    <span class="badge badge-neutral">Safe: 2.0°C – 8.0°C</span>
+                </div>
+                <div class="telemetry-readout">
+                    <span id="temp-readout-val" 
+                          th:class="${latestLog != null and (latestLog.temperature < 2.0 or latestLog.temperature > 8.0)} ? 'temp-value breach' : 'temp-value'"
+                          th:text="${latestLog != null} ? ${#numbers.formatDecimal(latestLog.temperature, 1, 1)} : '4.5'">
+                        4.5
+                    </span>
+                    <span class="temp-unit">°C</span>
+                </div>
+
+                <!-- Safe Range Gauge Bar -->
+                <div class="gauge-wrapper">
+                    <div class="gauge-track">
+                        <div class="gauge-safe-bracket" title="WHO Safe Cold-Chain Range (2°C - 8°C)"></div>
+                        <div id="gauge-needle" class="gauge-needle" 
+                             th:style="${latestLog != null} ? 
+                                'left: calc(' + (${latestLog.temperature < 0 ? 0 : (latestLog.temperature > 12 ? 12 : latestLog.temperature)} / 12.0 * 100) + '% - 2px);' : 
+                                'left: calc(37.5% - 2px);'">
+                        </div>
+                    </div>
+                    <div class="gauge-labels">
+                        <span>0°C</span>
+                        <span style="color: #10b981; font-weight: 600;">2°C – 8°C (WHO Zone)</span>
+                        <span>12°C</span>
+                    </div>
+                </div>
+
+                <div class="humidity-bar-wrapper">
+                    <span style="color: #64748b; font-weight: 500;">Relative Humidity:</span>
+                    <span id="humidity-readout-val" style="font-weight: 700; color: #1e3a8a;"
+                          th:text="${latestLog != null} ? ${#numbers.formatDecimal(latestLog.humidity, 1, 1)} + '%' : '45.0%'">
+                        45.0%
+                    </span>
+                </div>
+            </div>
+
+            <!-- Card 3: Multi-Hub Transit Progress -->
+            <div class="dash-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <span class="card-icon">&#128666;</span> Transit Hub Progress
+                    </span>
+                    <span class="badge badge-success">3-Hub Custody</span>
+                </div>
+                <div class="custody-current-hub" id="current-hub-val" th:text="${batch.currentHub}">
+                    Manufacturer Hub
+                </div>
+
+                <!-- Hub Stepper Visual -->
+                <div class="custody-stepper-visual">
+                    <!-- Step 1: Manufacturer Hub -->
+                    <div id="stepper-step-1" 
+                         th:class="${batch.custodyStep > 1} ? 'stepper-step completed' : (${batch.custodyStep == 1} ? 'stepper-step active' : 'stepper-step')">
+                        <div class="step-marker" th:text="${batch.custodyStep > 1} ? '✓' : '1'">1</div>
+                        <div class="step-hub-name">Manufacturer Hub</div>
+                    </div>
+                    <!-- Step 2: Distributor Hub (College) -->
+                    <div id="stepper-step-2" 
+                         th:class="${batch.custodyStep > 2} ? 'stepper-step completed' : (${batch.custodyStep == 2} ? 'stepper-step active' : 'stepper-step')">
+                        <div class="step-marker" th:text="${batch.custodyStep > 2} ? '✓' : '2'">2</div>
+                        <div class="step-hub-name">Distributor Hub (College)</div>
+                    </div>
+                    <!-- Step 3: Consumer Hospital -->
+                    <div id="stepper-step-3" 
+                         th:class="${batch.custodyStep == 3} ? 'stepper-step active' : 'stepper-step'">
+                        <div class="step-marker">3</div>
+                        <div class="step-hub-name">Consumer Hospital</div>
+                    </div>
+                </div>
+
+                <div style="font-size: 0.72rem; color: #64748b; margin-top: auto;">
+                    Autonomous validation on physical tag scan
+                </div>
+            </div>
+
+            <!-- Card 4: Blockchain & Keccak-256 Notarization -->
+            <div class="dash-card">
+                <div class="card-header">
+                    <span class="card-title">
+                        <span class="card-icon">&#9939;</span> Keccak-256 Ledger
+                    </span>
+                    <span class="badge badge-neutral">EVM Standby</span>
+                </div>
+                <div class="blockchain-badge-row">
+                    <span style="font-size: 0.72rem; color: #64748b; font-weight: 600;">LATEST NOTARIZED HASH</span>
+                    <span class="badge badge-success" style="font-size: 0.65rem;">Web3j SHA3</span>
+                </div>
+                <div id="latest-txhash-val" class="hash-container" 
+                     th:text="${latestLog != null} ? ${latestLog.txHash} : '0x7e4b9d10a8c2f5e39d7b4a2c1f0e8d9b6a4c2e1f8d7b5a3c9e2f4a1d6b8c0e2a'">
+                    0x7e4b9d10a8c2f5e39d7b4a2c1f0e8d9b6a4c2e1f8d7b5a3c9e2f4a1d6b8c0e2a
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: auto;">
+                    <span style="font-size: 0.7rem; color: #64748b;">Deterministic proof sealed</span>
+                    <button class="copy-btn" onclick="copyToClipboard(document.getElementById('latest-txhash-val').textContent.trim(), this)">
+                        Copy Full Hash
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Interactive Hardware Simulation & Test Rig Panel -->
+        <section class="rig-panel">
+            <div class="rig-header">
+                <div class="rig-title">
+                    <span>&#9881;&#65039;</span> Hardware Telemetry Ingestion &amp; Simulation Rig
+                </div>
+                <div style="font-size: 0.76rem; color: #64748b;">
+                    Simulate RFID scans &amp; DHT22 temperature transmissions
+                </div>
+            </div>
+
+            <!-- Quick Simulation Actions -->
+            <div class="rig-buttons-grid">
+                <button class="btn btn-outline-green" onclick="simulateTag1DistributorScan()">
+                    <span>🏷️</span> Scan Tag 1 (2AF52B07 &bull; Distributor)
+                </button>
+                <button class="btn btn-outline-blue" onclick="simulateTag2DistributorScan()">
+                    <span>👤</span> Scan Tag 2 (659A1707 &bull; Distributor)
+                </button>
+                <button class="btn btn-outline-purple" onclick="simulateAuthorizedScan('Consumer Hospital', 3.8, 42.0)">
+                    <span>🏥</span> Scan Hub 3 (Consumer Hospital)
+                </button>
+                <button class="btn btn-outline-red" onclick="simulateUnauthorizedScan()">
+                    <span>🚨</span> Tamper Breach (Unauthorized Tag)
+                </button>
+                <button class="btn btn-outline-amber" onclick="simulateThermalExcursion()">
+                    <span>⚠️</span> Thermal Excursion (11.4°C)
+                </button>
+                <button class="btn btn-neutral" onclick="resetBatchCustody()">
+                    <span>🔄</span> Reset Custody
+                </button>
+            </div>
+
+            <!-- Custom Payload Form -->
+            <form id="custom-telemetry-form" class="custom-rig-form">
+                <div class="form-group">
+                    <label for="form-rfid-uid">RFID Tag UID</label>
+                    <input type="text" id="form-rfid-uid" class="form-control" th:value="${primaryRfid}" list="registered-uids-list" required>
+                    <datalist id="registered-uids-list">
+                        <option value="2AF52B07">Tag 1 (Authorized Primary)</option>
+                        <option value="659A1707">Tag 2 (Authorized Custodian)</option>
+                        <option value="99AABBCC">Unauthorized Tag (Tamper Alarm Trigger)</option>
+                    </datalist>
+                </div>
+                <div class="form-group">
+                    <label for="form-batch-id">Batch ID</label>
+                    <input type="text" id="form-batch-id" class="form-control" th:value="${batch.batchId}" required>
+                </div>
+                <div class="form-group">
+                    <label for="form-temperature">Temperature (°C)</label>
+                    <input type="number" step="0.1" id="form-temperature" class="form-control" value="4.5" required>
+                </div>
+                <div class="form-group">
+                    <label for="form-humidity">Humidity (% RH)</label>
+                    <input type="number" step="0.1" id="form-humidity" class="form-control" value="45.0" required>
+                </div>
+                <div class="form-group">
+                    <label for="form-location-name">Transit Hub</label>
+                    <select id="form-location-name" class="form-control">
+                        <option value="Manufacturer Hub">Manufacturer Hub</option>
+                        <option value="Distributor Hub (College)">Distributor Hub (College)</option>
+                        <option value="Consumer Hospital">Consumer Hospital</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-primary" style="height: 34px;">
+                    Send Ingestion Payload
+                </button>
+            </form>
+
+            <!-- Response Feedback Card (Populated dynamically on simulation) -->
+            <div id="response-feedback-card" style="display: none; margin-top: 1rem; background: #0f172a; border-radius: 6px; padding: 0.75rem 1rem; color: #38bdf8; font-family: monospace; font-size: 0.76rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; color: #94a3b8; font-size: 0.72rem; text-transform: uppercase;">
+                    <span>IoT Hardware Actuator Instruction Returned</span>
+                    <button type="button" onclick="hideFeedbackModal()" style="background: transparent; border: none; color: #94a3b8; cursor: pointer; font-size: 0.9rem;">✕ Close</button>
+                </div>
+                <pre id="response-json-preview" style="white-space: pre-wrap; margin: 0;"></pre>
+            </div>
+        </section>
+
+        <!-- Audit Trail & Telemetry Ledger Table -->
+        <section class="ledger-section">
+            <div class="ledger-header">
+                <div class="ledger-title">
+                    <span>&#128220;</span> Immutable Cold-Chain Audit Trail &amp; Telemetry Ledger
+                </div>
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <span class="ledger-count-badge">
+                        Total Logs: <span id="total-logs-count" th:text="${totalLogs}">0</span>
+                    </span>
+                    <span class="badge badge-danger" style="font-size: 0.7rem;">
+                        Breaches: <span id="total-breaches-count" th:text="${totalBreaches}">0</span>
+                    </span>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="audit-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Transit Hub Location</th>
+                            <th>Batch ID</th>
+                            <th>Scanned RFID UID</th>
+                            <th>Temp &amp; Humidity</th>
+                            <th>Verification Status</th>
+                            <th>Actuator State</th>
+                            <th>Keccak-256 Hash</th>
+                        </tr>
+                    </thead>
+                    <tbody id="audit-table-body">
+                        <tr th:if="${recentLogs == null or #lists.isEmpty(recentLogs)}">
+                            <td colspan="8" style="text-align: center; color: #94a3b8; padding: 2rem;">
+                                No telemetry logs recorded in H2 database yet. Trigger a scan from the simulation rig above.
+                            </td>
+                        </tr>
+                        <tr th:each="log : ${recentLogs}">
+                            <td style="font-weight: 500; font-size: 0.78rem;" th:text="${#temporals.format(log.timestamp, 'yyyy-MM-dd HH:mm:ss')}">2026-11-02 12:00:00</td>
+                            <td><span style="font-weight: 600;" th:text="${log.locationName}">Manufacturer Hub</span></td>
+                            <td class="mono-cell" th:text="${log.batchId}">VAX-B4920-COVID19</td>
+                            <td class="mono-cell" style="font-weight: 600;">
+                                <span th:text="${log.rfidUid}">2AF52B07</span>
+                                <span th:if="${log.rfidUid == '2AF52B07'}" class="badge badge-success" style="font-size: 0.65rem; margin-left: 0.3rem;">Tag 1 (Auth)</span>
+                                <span th:if="${log.rfidUid == '659A1707'}" class="badge badge-success" style="font-size: 0.65rem; margin-left: 0.3rem;">Tag 2 (Auth)</span>
+                            </td>
+                            <td>
+                                <span th:style="${log.temperature < 2.0 or log.temperature > 8.0} ? 'color: #dc2626; font-weight: 700;' : 'color: #166534; font-weight: 700;'"
+                                      th:text="${#numbers.formatDecimal(log.temperature, 1, 1)} + '°C'">
+                                    4.5°C
+                                </span>
+                                <span style="color: #64748b; font-size: 0.75rem;" th:text="'(' + ${#numbers.formatDecimal(log.humidity, 1, 1)} + '% RH)'">(45.0% RH)</span>
+                            </td>
+                            <td>
+                                <span th:if="${log.verificationStatus.name() == 'AUTHENTIC_VERIFIED'}" class="badge badge-success">&#10003; Authentic Verified</span>
+                                <span th:if="${log.verificationStatus.name() == 'UNAUTHORIZED_TAG_BREACH'}" class="badge badge-danger">&#9888; Tag Breach (Tamper)</span>
+                                <span th:if="${log.verificationStatus.name() == 'THERMAL_BREACH'}" class="badge badge-warning">&#9888; Thermal Excursion</span>
+                            </td>
+                            <td>
+                                <span th:if="${log.buzzerActive}" class="badge badge-danger" th:text="'Buzzer ON | ' + ${log.ledColor}">Buzzer ON | RED</span>
+                                <span th:unless="${log.buzzerActive}" class="badge badge-success" th:text="'Buzzer OFF | ' + ${log.ledColor}">Buzzer OFF | GREEN</span>
+                            </td>
+                            <td class="mono-cell" style="color: #0284c7;" th:title="${log.txHash}">
+                                <span th:text="${#strings.substring(log.txHash, 0, 10)} + '...' + ${#strings.substring(log.txHash, #strings.length(log.txHash) - 8)}">0x7e4b9...b8c0e2a</span>
+                                <button class="copy-btn" th:attr="onclick=|copyToClipboard('${log.txHash}', this)|" style="margin-left: 0.25rem;">Copy</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Developer & Hardware Ingestion Quick Reference -->
+        <section class="api-spec-card">
+            <div style="font-size: 0.85rem; font-weight: 700; color: #0f172a; margin-bottom: 0.35rem;">
+                &#128187; IoT Hardware Integration Reference (ESP32 / Arduino / Raspberry Pi)
+            </div>
+            <div style="font-size: 0.78rem; color: #475569;">
+                Send HTTP POST to <code style="font-family: monospace; color: #2563eb; background: #eff6ff; padding: 0.1rem 0.35rem; border-radius: 4px;">/api/telemetry</code> with JSON payload. Returns active actuator directives (<code style="font-family: monospace;">buzzer</code> and <code style="font-family: monospace;">led</code>).
+            </div>
+            <div class="api-curl-code">
+curl -X POST http://localhost:8080/api/telemetry \
+  -H "Content-Type: application/json" \
+  -d '{"rfidUid": "2AF52B07", "batchId": "VAX-B4920-COVID19", "temperature": 4.5, "humidity": 45.2, "locationName": "Distributor Hub (College)"}'
+            </div>
+        </section>
+
+    </main>
+
+    <script th:src="@{/js/dashboard.js}"></script>
+</body>
+</html>
